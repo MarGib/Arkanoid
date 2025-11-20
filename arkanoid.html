@@ -1,0 +1,436 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+    <meta charset="UTF-8">
+    <!-- Kluczowe: viewport-fit=cover dla telefonów z Notchem -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Arkanoid ULTRA DELUXE</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Orbitron:wght@400;700;900&display=swap');
+
+        :root {
+            --header-height: 60px;
+            --bottom-safe-zone: 15vh; /* Miejsce na palec */
+        }
+
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #050505;
+            color: #fff;
+            font-family: 'Orbitron', sans-serif;
+            
+            /* Używamy dvh (dynamic height) zamiast vh, żeby pasek adresu nie ucinał gry */
+            height: 100dvh; 
+            width: 100vw;
+            overflow: hidden;
+            touch-action: none;
+            
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            /* Wyśrodkowanie w pionie, ale z priorytetem góry */
+            justify-content: center; 
+        }
+
+        #game-container {
+            position: relative;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            
+            /* Odsunięcie od góry uwzględniające pasek statusu/notch */
+            padding-top: max(10px, env(safe-area-inset-top));
+            box-sizing: border-box;
+        }
+
+        /* --- UI (WYNIKI) --- */
+        #ui {
+            width: 96%;
+            max-width: 900px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-end;
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 10px; /* Odstęp między wynikami a grą */
+            pointer-events: none;
+            color: #00d2ff;
+            text-shadow: 0 0 8px rgba(0, 210, 255, 0.6);
+            z-index: 20;
+            min-height: 40px; /* Rezerwacja miejsca */
+        }
+        
+        .ui-group { text-align: center; flex: 1; }
+        .ui-label { font-size: 9px; color: #888; display: block; margin-bottom: 2px;}
+        .ui-val { font-size: 16px; color: white; }
+
+        /* --- CANVAS (GRA) --- */
+        canvas {
+            background: radial-gradient(circle at center, #1a1a2e 0%, #000000 100%);
+            border: 2px solid #333;
+            box-shadow: 0 0 30px rgba(0, 210, 255, 0.1);
+            border-radius: 8px;
+            display: block;
+            
+            /* Logika rozmiaru */
+            width: 94%; /* Marginesy boczne */
+            max-width: 800px;
+            height: auto;
+            aspect-ratio: 4/3; 
+            
+            /* To zostanie nadpisane przez JS, ale jako fallback: */
+            max-height: 65dvh; 
+            
+            cursor: none;
+        }
+
+        /* --- OVERLAY (MENU) --- */
+        #overlay {
+            position: absolute;
+            top: 55%; /* Trochę niżej żeby nie zasłaniać UI */
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            background: rgba(10, 10, 15, 0.95);
+            backdrop-filter: blur(8px);
+            padding: 25px;
+            border: 1px solid #00d2ff;
+            box-shadow: 0 0 30px rgba(0, 210, 255, 0.3);
+            border-radius: 15px;
+            z-index: 100;
+            width: 85%;
+            max-width: 400px;
+            transition: opacity 0.3s;
+        }
+
+        h1 { 
+            margin: 0 0 10px 0; 
+            font-size: 28px;
+            background: linear-gradient(to right, #fff, #00d2ff, #fff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            animation: shine 3s infinite linear;
+            background-size: 200% auto;
+        }
+        @keyframes shine { to { background-position: 200% center; } }
+        
+        button {
+            background: linear-gradient(45deg, #00d2ff, #007bff);
+            border: none;
+            padding: 12px 30px;
+            color: white;
+            font-family: 'Orbitron', sans-serif;
+            font-size: 16px;
+            font-weight: bold;
+            border-radius: 50px;
+            cursor: pointer;
+            margin-top: 15px;
+            box-shadow: 0 0 15px rgba(0, 210, 255, 0.5);
+        }
+
+        /* Efekt trzęsienia ekranem */
+        .shake-glitch { animation: shake 0.3s cubic-bezier(.36,.07,.19,.97) both; }
+        @keyframes shake {
+            10%, 90% { transform: translate3d(-1px, 0, 0); }
+            20%, 80% { transform: translate3d(2px, 0, 0); }
+            30%, 50%, 70% { transform: translate3d(-4px, 0, 0); }
+            40%, 60% { transform: translate3d(4px, 0, 0); }
+        }
+        
+        /* Leaderboard CSS */
+        #leaderboard { margin-top: 15px; text-align: left; width: 100%; font-size: 12px; border-top: 1px solid #333; padding-top: 10px; }
+        .lb-row { display: flex; justify-content: space-between; padding: 3px 0; color: #ccc; }
+        .lb-row.header { color: #00d2ff; font-weight: bold; margin-bottom: 5px;}
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <div id="ui">
+        <div class="ui-group"><span class="ui-label">WYNIK</span><span id="score" class="ui-val">0</span></div>
+        <div class="ui-group"><span class="ui-label">POZIOM</span><span id="level" class="ui-val">1</span></div>
+        <div class="ui-group"><span class="ui-label">ODBICIA</span><span id="bounces" class="ui-val">0</span></div>
+        <div class="ui-group"><span class="ui-label">ŻYCIA</span><span id="lives" class="ui-val">3</span></div>
+    </div>
+
+    <canvas id="gameCanvas" width="800" height="600"></canvas>
+
+    <div id="overlay">
+        <h1 id="title">ARKANOID ULTRA</h1>
+        <p id="message" style="color: #ddd; font-size: 13px;">Przygotuj się!</p>
+        
+        <div id="leaderboard">
+            <div class="lb-row header"><span>TOP 5</span><span>PKT</span></div>
+            <div id="lb-content"></div>
+        </div>
+
+        <button id="btn-start">START</button>
+        <div style="margin-top: 15px; font-size: 10px; color: #666;">Sterowanie: Dotknij i przesuwaj na dole</div>
+    </div>
+</div>
+
+<script>
+    // --- SYSTEM SKALOWANIA (Responsive Fix) ---
+    const canvas = document.getElementById("gameCanvas");
+    const ui = document.getElementById("ui");
+    
+    function resizeGame() {
+        // Pobieramy rzeczywistą wysokość okna przeglądarki
+        const windowHeight = window.innerHeight;
+        const uiHeight = ui.offsetHeight + 20; // Wysokość paska wyników + margines
+        const bottomSafety = windowHeight * 0.15; // 15% ekranu na dole na palec
+        
+        // Obliczamy ile miejsca zostaje na grę
+        const availableHeight = windowHeight - uiHeight - bottomSafety;
+        
+        // Ustawiamy max-height canvasa
+        canvas.style.maxHeight = `${availableHeight}px`;
+    }
+
+    // Uruchom skalowanie przy starcie i przy zmianie rozmiaru/obrotu
+    window.addEventListener('resize', resizeGame);
+    window.addEventListener('load', resizeGame);
+    // Dodatkowo po chwili, bo paski adresu czasem znikają z opóźnieniem
+    setTimeout(resizeGame, 500);
+
+
+    // --- KONFIGURACJA GRY ---
+    const ctx = canvas.getContext("2d", { alpha: false });
+    const container = document.getElementById("game-container");
+    const overlay = document.getElementById("overlay");
+    const btnStart = document.getElementById("btn-start");
+    const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent) || window.innerWidth < 800;
+
+    // Audio
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    const audioCtx = new AudioContext();
+    const masterGain = audioCtx.createGain();
+    masterGain.gain.value = 0.25;
+    masterGain.connect(audioCtx.destination);
+
+    function playSound(type) {
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+        const t = audioCtx.currentTime;
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.connect(gain); gain.connect(masterGain);
+
+        if (type === 'hit') {
+            osc.type = 'square'; osc.frequency.setValueAtTime(300, t); osc.frequency.exponentialRampToValueAtTime(600, t+0.1);
+            gain.gain.setValueAtTime(0.5, t); gain.gain.exponentialRampToValueAtTime(0.01, t+0.1);
+            osc.start(t); osc.stop(t+0.1);
+        } else if (type === 'paddle') {
+            osc.type = 'sine'; osc.frequency.setValueAtTime(200, t); osc.frequency.linearRampToValueAtTime(400, t+0.1);
+            gain.gain.setValueAtTime(0.8, t); gain.gain.exponentialRampToValueAtTime(0.01, t+0.15);
+            osc.start(t); osc.stop(t+0.15);
+        } else if (type === 'powerup') {
+            osc.type = 'triangle'; osc.frequency.setValueAtTime(600, t); osc.frequency.linearRampToValueAtTime(1200, t+0.15);
+            gain.gain.setValueAtTime(0.5, t); gain.gain.linearRampToValueAtTime(0, t+0.3);
+            osc.start(t); osc.stop(t+0.3);
+        } else if (type === 'lost') {
+            osc.type = 'sawtooth'; osc.frequency.setValueAtTime(100, t); osc.frequency.exponentialRampToValueAtTime(20, t+0.6);
+            gain.gain.setValueAtTime(0.5, t); gain.gain.linearRampToValueAtTime(0, t+0.6);
+            osc.start(t); osc.stop(t+0.6);
+        }
+    }
+
+    // --- GAMEPLAY ---
+    let gameState = 'START';
+    let score = 0;
+    let lives = 3;
+    let level = 1;
+    let bounces = 0;
+    const initialSpeed = isMobile ? 3.5 : 5.0; 
+
+    const ball = { x: 400, y: 500, dx: 0, dy: 0, radius: isMobile ? 9 : 6, speed: initialSpeed, active: false, trail: [] };
+    const paddle = { width: 120, height: 15, x: 340, targetX: 340, baseWidth: 120, color: '#00d2ff' };
+    let bricks = [];
+    let particles = [];
+    let powerUps = [];
+    let stars = [];
+
+    // Leaderboard
+    function getScores() { return JSON.parse(localStorage.getItem('arkanoid_top5')) || []; }
+    function saveScore(newScore) {
+        let scores = getScores();
+        scores.push({ score: newScore, date: new Date().toLocaleDateString() });
+        scores.sort((a, b) => b.score - a.score);
+        localStorage.setItem('arkanoid_top5', JSON.stringify(scores.slice(0, 5)));
+    }
+    function renderLeaderboard() {
+        const scores = getScores();
+        const cont = document.getElementById('lb-content');
+        cont.innerHTML = '';
+        if(!scores.length) cont.innerHTML = '<div class="lb-row" style="justify-content:center">Brak wyników</div>';
+        scores.forEach((s, i) => {
+            cont.innerHTML += `<div class="lb-row"><span>${i+1}. ${s.date}</span><span style="color:#fff">${s.score}</span></div>`;
+        });
+    }
+
+    // Generator
+    function generateLevel(lvl) {
+        bricks = [];
+        const rows = 8;
+        const cols = 10;
+        const brickW = 68; 
+        const brickH = 22;
+        const padding = 8;
+        // Obliczanie offsetu żeby wyśrodkować
+        const totalW = (cols * brickW) + ((cols - 1) * padding);
+        const startX = (canvas.width - totalW) / 2;
+        const offsetTop = 60;
+        
+        const colors = ["#FF0040", "#FF4000", "#FFBF00", "#80FF00", "#00FF80", "#00FFFF", "#0040FF", "#8000FF"];
+        for (let c = 0; c < cols; c++) {
+            for (let r = 0; r < rows; r++) {
+                let active = false;
+                if (lvl%5===1) active=true;
+                else if (lvl%5===2) active=(c+r)%2===0;
+                else if (lvl%5===3) active=c%2===0;
+                else if (lvl%5===4) active=c>=r && c<cols-r;
+                else active=Math.random()>0.4;
+
+                if(active) bricks.push({ x: startX + c*(brickW+padding), y: offsetTop + r*(brickH+padding), status: 1, color: colors[r%colors.length] });
+            }
+        }
+    }
+
+    // Effects
+    function initStars() {
+        stars = [];
+        for(let i=0; i<50; i++) stars.push({ x: Math.random()*canvas.width, y: Math.random()*canvas.height, size: Math.random()*2, speed: Math.random()*0.5+0.1 });
+    }
+    function spawnParticles(x, y, color) {
+        for (let i=0; i<(isMobile?6:12); i++) particles.push({ x: x, y: y, vx: (Math.random()-0.5)*8, vy: (Math.random()-0.5)*8, life: 1.0, color: color, size: Math.random()*3+1 });
+    }
+    function triggerShake() {
+        container.classList.remove('shake-glitch');
+        void container.offsetWidth;
+        container.classList.add('shake-glitch');
+    }
+
+    // Logic
+    function initLevel() {
+        ball.active=false; ball.x=canvas.width/2; ball.y=canvas.height-50; ball.dx=0; ball.dy=0; ball.trail=[];
+        paddle.x=(canvas.width-paddle.width)/2; paddle.targetX=paddle.x;
+        particles=[]; powerUps=[]; generateLevel(level);
+    }
+
+    function update() {
+        stars.forEach(s => { s.y+=s.speed; if(s.y>canvas.height) s.y=0; });
+        paddle.x += (paddle.targetX - paddle.x) * 0.25;
+        if(paddle.x<0) paddle.x=0; if(paddle.x+paddle.width>canvas.width) paddle.x=canvas.width-paddle.width;
+
+        if(!ball.active) {
+            ball.x = paddle.x + paddle.width/2; ball.y = canvas.height - paddle.height - ball.radius - 2;
+        } else {
+            ball.x+=ball.dx; ball.y+=ball.dy;
+            ball.trail.push({x:ball.x, y:ball.y}); if(ball.trail.length>10) ball.trail.shift();
+
+            if(ball.x+ball.dx>canvas.width-ball.radius || ball.x+ball.dx<ball.radius) ball.dx=-ball.dx;
+            if(ball.y+ball.dy<ball.radius) ball.dy=-ball.dy;
+            else if(ball.y+ball.dy>canvas.height) {
+                lives--; playSound('lost'); triggerShake(); updateUI();
+                if(lives<=0) gameOver(); else ball.active=false;
+            }
+
+            if(ball.y+ball.radius >= canvas.height-paddle.height && ball.x>=paddle.x && ball.x<=paddle.x+paddle.width) {
+                playSound('paddle'); bounces++;
+                if(bounces%10===0 && ball.speed<10) ball.speed+=0.5;
+                let hit = (ball.x - (paddle.x + paddle.width/2)) / (paddle.width/2);
+                let angle = hit * (Math.PI/3);
+                ball.dx = ball.speed * Math.sin(angle); ball.dy = -Math.abs(ball.speed * Math.cos(angle));
+                spawnParticles(ball.x, canvas.height-paddle.height, '#00d2ff'); updateUI();
+            }
+
+            let activeCount=0;
+            bricks.forEach(b => {
+                if(b.status===1) {
+                    activeCount++;
+                    if(ball.x>b.x && ball.x<b.x+68 && ball.y>b.y && ball.y<b.y+22) {
+                        ball.dy=-ball.dy; b.status=0; score+=10+(level*2); playSound('hit');
+                        spawnParticles(ball.x, ball.y, b.color);
+                        if(Math.random()>0.9) spawnPowerUp(b.x+34, b.y);
+                        updateUI();
+                    }
+                }
+            });
+            if(activeCount===0) nextLevel();
+        }
+
+        for(let i=particles.length-1; i>=0; i--) {
+            particles[i].x+=particles[i].vx; particles[i].y+=particles[i].vy; particles[i].vy+=0.15; particles[i].life-=0.03;
+            if(particles[i].life<=0) particles.splice(i,1);
+        }
+        for(let i=powerUps.length-1; i>=0; i--) {
+            powerUps[i].y+=2.5;
+            if(powerUps[i].y>=canvas.height-paddle.height && powerUps[i].x>=paddle.x && powerUps[i].x<=paddle.x+paddle.width) {
+                activatePowerUp(powerUps[i].type); playSound('powerup'); powerUps.splice(i,1);
+            } else if(powerUps[i].y>canvas.height) powerUps.splice(i,1);
+        }
+    }
+
+    function activatePowerUp(t) {
+        if(t==='W') { paddle.width+=40; setTimeout(()=>paddle.width=paddle.baseWidth,8000); }
+        else if(t==='S') { let old=ball.speed; ball.speed*=0.7; let a=Math.atan2(ball.dy,ball.dx); ball.dx=ball.speed*Math.cos(a); ball.dy=ball.speed*Math.sin(a); setTimeout(()=>ball.speed=old,6000); }
+        else if(t==='L') lives++;
+        else if(t==='F') score+=500;
+        updateUI();
+    }
+
+    function spawnPowerUp(x,y) {
+        const t=['W','S','L','F']; powerUps.push({x:x,y:y,type:t[Math.floor(Math.random()*t.length)]});
+    }
+
+    function draw() {
+        ctx.clearRect(0,0,canvas.width,canvas.height);
+        ctx.fillStyle="rgba(255,255,255,0.6)"; stars.forEach(s=>{ctx.beginPath();ctx.arc(s.x,s.y,s.size,0,Math.PI*2);ctx.fill();});
+        
+        if(ball.active) ball.trail.forEach((p,i)=>{
+            ctx.beginPath(); ctx.arc(p.x,p.y,ball.radius*(i/10),0,Math.PI*2); ctx.fillStyle=`rgba(0,210,255,${i/ball.trail.length*0.4})`; ctx.fill();
+        });
+
+        ctx.shadowBlur=20; ctx.shadowColor="#fff"; ctx.beginPath(); ctx.arc(ball.x,ball.y,ball.radius,0,Math.PI*2); ctx.fillStyle="#fff"; ctx.fill(); ctx.shadowBlur=0;
+
+        ctx.shadowBlur=15; ctx.shadowColor=paddle.color; ctx.fillStyle=paddle.color; ctx.beginPath(); ctx.roundRect(paddle.x,canvas.height-paddle.height,paddle.width,paddle.height,8); ctx.fill();
+        ctx.fillStyle="rgba(255,255,255,0.6)"; ctx.fillRect(paddle.x+5,canvas.height-paddle.height+4,paddle.width-10,3); ctx.shadowBlur=0;
+
+        bricks.forEach(b=>{
+            if(b.status===1) {
+                ctx.shadowBlur=10; ctx.shadowColor=b.color; ctx.fillStyle=b.color; ctx.fillRect(b.x,b.y,68,22);
+                ctx.fillStyle="rgba(255,255,255,0.3)"; ctx.fillRect(b.x,b.y,68,10); ctx.shadowBlur=0;
+            }
+        });
+
+        particles.forEach(p=>{ ctx.globalAlpha=p.life; ctx.fillStyle=p.color; ctx.beginPath(); ctx.arc(p.x,p.y,p.size,0,Math.PI*2); ctx.fill(); ctx.globalAlpha=1; });
+
+        powerUps.forEach(p=>{
+            ctx.shadowBlur=5; ctx.fillStyle=p.type==='S'?'#f33':(p.type==='W'?'#3f3':(p.type==='L'?'#33f':'#ff3'));
+            ctx.beginPath(); ctx.arc(p.x,p.y,12,0,Math.PI*2); ctx.fill(); ctx.shadowBlur=0;
+            ctx.fillStyle="#000"; ctx.font="bold 14px Arial"; ctx.textAlign="center"; ctx.textBaseline="middle"; ctx.fillText(p.type,p.x,p.y);
+        });
+    }
+
+    function loop() { if(gameState==='PLAYING') { update(); draw(); requestAnimationFrame(loop); } }
+    function startGame() { if(audioCtx.state==='suspended') audioCtx.resume(); gameState='PLAYING'; overlay.style.opacity="0"; setTimeout(()=>overlay.style.display="none",300); if(score===0 && level===1) resetGame(); else loop(); }
+    function resetGame() { score=0; lives=3; level=1; bounces=0; ball.speed=initialSpeed; paddle.width=paddle.baseWidth; updateUI(); initLevel(); initStars(); loop(); }
+    function nextLevel() { level++; ball.speed+=0.6; bounces=0; if(level>25) victory(); else { initLevel(); updateUI(); } }
+    function gameOver() { gameState='GAMEOVER'; saveScore(score); document.getElementById("title").innerText="KONIEC GRY"; document.getElementById("message").innerText=`Wynik: ${score}`; btnStart.innerText="ZAGRAJ PONOWNIE"; renderLeaderboard(); overlay.style.display="block"; setTimeout(()=>overlay.style.opacity="1",10); }
+    function victory() { gameState='VICTORY'; saveScore(score); document.getElementById("title").innerText="ZWYCIĘSTWO!"; document.getElementById("message").innerText=`Wynik: ${score}`; btnStart.innerText="ZAGRAJ OD NOWA"; renderLeaderboard(); overlay.style.display="block"; setTimeout(()=>overlay.style.opacity="1",10); }
+    function updateUI() { document.getElementById("score").innerText=score; document.getElementById("level").innerText=level; document.getElementById("lives").innerText=lives; document.getElementById("bounces").innerText=bounces; }
+
+    btnStart.addEventListener("click", ()=>{ if(gameState!=='PLAYING') { score=0; level=1; lives=3; bounces=0; } startGame(); });
+    document.addEventListener("touchmove", (e)=>{ e.preventDefault(); if(gameState!=='PLAYING') return; const r=canvas.getBoundingClientRect(); const s=canvas.width/r.width; paddle.targetX=(e.touches[0].clientX-r.left)*s-paddle.width/2; }, {passive:false});
+    document.addEventListener("touchstart", ()=>{ if(gameState==='PLAYING' && !ball.active) { ball.active=true; ball.dx=(Math.random()*4-2); ball.dy=-ball.speed; if(audioCtx.state==='suspended') audioCtx.resume(); }}, {passive:false});
+    document.addEventListener("mousemove", (e)=>{ if(isMobile) return; const r=canvas.getBoundingClientRect(); const s=canvas.width/r.width; paddle.targetX=(e.clientX-r.left)*s-paddle.width/2; });
+    document.addEventListener("keydown", (e)=>{ if(e.code==="Space") { if(gameState!=='PLAYING' && overlay.style.display!=='none') btnStart.click(); else if(gameState==='PLAYING' && !ball.active) { ball.active=true; ball.dx=(Math.random()*4-2); ball.dy=-ball.speed; if(audioCtx.state==='suspended') audioCtx.resume(); }}});
+
+    renderLeaderboard(); draw();
+    resizeGame();
+</script>
+</body>
+</html>
